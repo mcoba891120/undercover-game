@@ -22,6 +22,7 @@ export default function Home() {
     roomId: ''
   })
 
+  // 初始化
   useEffect(() => {
     // 檢查本地存儲的token
     const token = localStorage.getItem('token')
@@ -31,8 +32,12 @@ export default function Home() {
       setCurrentPage('mainMenu')
     }
 
-    // 初始化Socket
-    const socketInstance = io()
+    // 初始化Socket with correct path
+    const socketInstance = io(process.env.NODE_ENV === 'production' 
+      ? 'https://your-app.vercel.app' 
+      : 'http://localhost:3000', {
+      path: '/api/socket'
+    })
     setSocket(socketInstance)
 
     return () => socketInstance.close()
@@ -41,6 +46,16 @@ export default function Home() {
   useEffect(() => {
     if (socket) {
       // Socket事件監聽
+      socket.on('connect', () => {
+        console.log('✅ Socket connected:', socket.id)
+        addToGameLog('連接到遊戲服務器')
+      })
+
+      socket.on('disconnect', () => {
+        console.log('❌ Socket disconnected')
+        addToGameLog('與服務器斷開連接')
+      })
+
       socket.on('roomCreated', ({ roomId, room }) => {
         setRoom(room)
         setCurrentPage('room')
@@ -81,7 +96,9 @@ export default function Home() {
           ...prev, 
           currentVoteRound: round,
           votes: {},
-          votedPlayers: []
+          votedPlayers: [],
+          userVoted: false,
+          userVote: null
         }))
         addToGameLog(`第 ${round} 輪投票開始`)
       })
@@ -100,6 +117,8 @@ export default function Home() {
       })
 
       socket.on('error', (message) => {
+        console.error('Socket error:', message)
+        addToGameLog(`錯誤: ${message}`)
         alert(message)
       })
     }
@@ -121,8 +140,10 @@ export default function Home() {
       
       setUser(user)
       setCurrentPage('mainMenu')
+      addToGameLog(`歡迎, ${user.username}！`)
       
     } catch (error) {
+      console.error('Auth error:', error)
       alert(error.response?.data?.message || 'Authentication failed')
     }
   }
@@ -134,6 +155,7 @@ export default function Home() {
     setCurrentPage('auth')
     setRoom(null)
     setGameData(null)
+    setGameLog([])
   }
 
   const createRoom = () => {
@@ -141,7 +163,11 @@ export default function Home() {
       alert('請輸入房間名稱！')
       return
     }
-    socket.emit('createRoom', { roomName: roomForm.roomName, username: user.username })
+    if (!socket?.connected) {
+      alert('未連接到服務器，請重新整理頁面')
+      return
+    }
+    socket.emit('createRoom', { roomName: roomForm.roomName, username: user.username, riotUsername: user.riotUsername })
   }
 
   const joinRoom = () => {
@@ -149,7 +175,11 @@ export default function Home() {
       alert('請輸入房間ID！')
       return
     }
-    socket.emit('joinRoom', { roomId: roomForm.roomId, username: user.username })
+    if (!socket?.connected) {
+      alert('未連接到服務器，請重新整理頁面')
+      return
+    }
+    socket.emit('joinRoom', { roomId: roomForm.roomId, username: user.username, riotUsername: user.riotUsername })
   }
 
   const startGame = () => {
@@ -157,7 +187,7 @@ export default function Home() {
   }
 
   const endGame = () => {
-    socket.emit('endGame', { roomId: room.id, username: user.username })
+    socket.emit('endGame', { roomId: room.id, username: user.username, riotUsername: user.riotUsername })
   }
 
   const handleRiotAPICheck = async () => {
@@ -197,7 +227,6 @@ export default function Home() {
       
     } catch (error) {
       console.error('Riot API error:', error)
-      // 回退到模擬結果
       const isVictory = Math.random() > 0.5
       setTimeout(() => {
         addToGameLog(`API查詢失敗，使用模擬結果: ${isVictory ? '勝利 🎉' : '失敗 💀'}`)
@@ -318,6 +347,13 @@ export default function Home() {
             <div className="text-center mb-8">
               <h1 className="text-3xl font-bold text-gray-800 mb-2">歡迎回來！</h1>
               <p className="text-gray-600">嗨 {user?.username}，準備開始遊戲了嗎？</p>
+              <div className="mt-2">
+                <span className={`inline-block px-2 py-1 rounded text-sm ${
+                  socket?.connected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  {socket?.connected ? '🟢 已連接' : '🔴 未連接'}
+                </span>
+              </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -382,6 +418,22 @@ export default function Home() {
                 </div>
               </div>
             </div>
+
+            {/* 遊戲記錄 */}
+            <div className="bg-gray-50 p-4 rounded-xl mb-6">
+              <h4 className="font-semibold text-gray-800 mb-2">📜 活動記錄</h4>
+              <div className="max-h-32 overflow-y-auto space-y-1">
+                {gameLog.length === 0 ? (
+                  <p className="text-gray-500 text-sm">暫無活動記錄</p>
+                ) : (
+                  gameLog.slice(-5).map((log, index) => (
+                    <div key={index} className="text-sm text-gray-600 p-1 bg-white rounded">
+                      {log}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
             
             <div className="text-center">
               <button
@@ -432,14 +484,14 @@ export default function Home() {
             <div className="flex justify-center space-x-4 mb-8">
               <button
                 onClick={startGame}
-                disabled={room.players?.length !== 5}
+                disabled={room.players?.length !== 2}
                 className={`px-8 py-3 rounded-lg font-semibold transform transition-all duration-200 ${
-                  room.players?.length === 5
+                  room.players?.length === 2
                     ? 'bg-green-500 text-white hover:bg-green-600 hover:scale-105'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 }`}
               >
-                開始遊戲 {room.players?.length !== 5 && `(需要${5 - (room.players?.length || 0)}人)`}
+                開始遊戲 {room.players?.length !== 2 && `(需要${5 - (room.players?.length || 0)}人)`}
               </button>
               
               <button

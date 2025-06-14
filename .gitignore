@@ -1,2 +1,6 @@
 node_modules/
 .env.local
+.vercel
+.next/
+python_test/
+
